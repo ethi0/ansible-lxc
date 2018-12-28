@@ -1,0 +1,115 @@
+---
+- hosts: lxc
+  vars_prompt:
+    name: "username"
+    prompt: Enter the username
+    default: user
+    private: no
+
+  tasks:
+  - name:
+    setup:
+      gather_subset: network
+      gather_timeout: 1
+
+  - name: Edit debian repositories
+    replace:
+      dest: /etc/apt/sources.list
+      regexp: '^\s*main*$'
+      replace: '\main contrib non-free\2'
+  - name: apt-get update cache
+    apt:
+      update_cache: yes
+  - name: apt-get upgrade packages
+    apt:
+      upgrade: dist
+  - name: apt-get autoremove excessed packages
+    apt:
+      autoremove: yes
+  - name: apt-get autoclean useless packages from the cache
+    apt:
+     autoclean: yes
+  - name: apt-get install python-pexpext
+    apt:
+      name: python-pexpect
+      state: present
+
+  - name: Add USER  
+    user:
+      name: "{{ username  }}"
+      password: $1$jG2uA9l/$rVDPNCcdl.zFKfNZAwinh0 #qazwsx
+      groups: 
+       - sudo
+      state: present
+      shell: /bin/bash
+      create_home: yes
+
+
+  # you don't want to show passwords in your logs
+#    no_log: true
+
+  - name: Add public key to the remote host for USER
+    authorized_key:
+      user: "{{ username }}"
+      state: present
+      key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+  - name: Add public key to the remote host for ROOT
+    authorized_key:
+      user: root
+      state: present
+      key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+
+  - name: Check service SSH
+    systemd:
+       name: ssh
+       state: started
+  - name: Install the packages
+    apt:
+     name: "{{ packages }}"
+     state: present
+    vars:
+      packages:
+      - net-tools
+      - vim
+      - python-pip
+      - python2.7
+      - sudo
+      - htop
+      - python3
+      - python3-pip
+      - bash-completion
+      - screen
+      - dnsutils
+      - gdebi
+      - aptitude
+
+  - name: Add USER to SUDOers
+    lineinfile:
+      dest: /etc/sudoers
+      insertafter: '^\s*root    ALL=(ALL:ALL) ALL*$'
+      line: '{{ username }}	ALL=(ALL:ALL) ALL'
+ 
+  - name: Copy VIM-config to ROOT
+    copy:
+      src: ~/ansible_templates/user/vimrc
+      dest: /root/.vimrc
+  - name: Copy VIM-config to USER
+    copy:
+      src: ~/ansible_templates/user/vimrc
+      dest: /home/{{ username }}/.vimrc
+  - name: Copy SCREEN-config to ROOT
+    copy:
+      src: ~/ansible_templates/user/screenrc
+      dest: /root/.screenrc
+  - name: Copy SCREEN-config to USER
+    copy:
+      src: ~/ansible_templates/user/screenrc
+      dest: /home/{{ username }}/.screenrc
+  - name: Make bash-completion for ROOT
+    lineinfile:
+      dest: /root/.bashrc
+      line: '. /etc/bash_completion'
+  - name: Make bash-completion for USER
+    lineinfile:
+      dest: /home/{{ username }}/.bashrc
+      line: '. /etc/bash_completion'

@@ -1,0 +1,231 @@
+---
+- hosts: remote
+  vars_prompt:
+    - name: "username"
+      prompt: "Enter the username on the target host"
+      private: no
+      default: user
+    - name: "container"
+      prompt: "Enter the name of the container"
+      private: no
+    - name: "address"
+      prompt: "Enter static IP/MASK for the container"
+      private: no
+    - name: "gateway"
+      prompt: "Enter the gateway for the container"
+      private: no
+    - name: "sshport"
+      prompt: "Enter the SSH-port for the container"
+      private: no
+
+  tasks:
+  - name:
+    setup:
+      gather_subset: network
+      gather_timeout: 1
+
+  - name: Edit debian repositories
+    replace:
+      dest: /etc/apt/sources.list
+      regexp: '^\s*main*$'
+      replace: '\main contrib non-free\2'
+  - name: apt-get update cache
+    apt:
+      update_cache: yes
+  - name: apt-get upgrade packages
+    apt:
+      upgrade: dist
+  - name: apt-get autoremove excessed packages
+    apt:
+      autoremove: yes
+  - name: apt-get autoclean useless packages from the cache
+    apt:
+     autoclean: yes
+  - name: apt-get install python-pexpext
+    apt:
+      name: python-pexpect
+      state: present
+  - name: apt-get remove unscd
+    apt:
+      name: unscd
+      state: absent
+
+  - name: Add USER  
+    user:
+      name: "{{ username }}"
+      password: $1$jG2uA9l/$rVDPNCcdl.zFKfNZAwinh0 #qazwsx
+      groups: 
+       - sudo
+      state: present
+      shell: /bin/bash
+      create_home: yes
+
+  - name: Add public key to the remote host for USER
+    authorized_key:
+      user: "{{ username }}"
+      state: present
+      key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+  - name: Add public key to the remote host for ROOT
+    authorized_key:
+      user: root
+      state: present
+      key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+
+  - name: Check service SSH
+    systemd:
+       name: ssh
+       state: started
+  - name: Install the packages
+    apt:
+     name: "{{ packages }}"
+     state: present
+    vars:
+      packages:
+      - net-tools
+      - vim
+      - python-pip
+      - python2.7
+      - sudo
+      - htop
+      - python3
+      - python3-pip
+      - bash-completion
+      - screen
+      - dnsutils
+      - gdebi
+      - aptitude
+
+  - name: Add USER to SUDOers
+    lineinfile:
+      dest: /etc/sudoers
+      insertafter: '^\s*root    ALL=(ALL:ALL) ALL*$'
+      line: '{{ username }}	ALL=(ALL:ALL) ALL'
+      
+ 
+#  - name: Reboot the mainframe #Uncomment for your first usage.
+#    reboot:
+
+  - name: Wait for the mainframe become online
+    wait_for_connection:
+      timeout: 100
+
+  - name: Say "hello"
+    systemd:
+       name: ssh
+       state: started
+
+
+  - name: Ensure /etc/lxc directory exists
+    file: 
+      path: /etc/lxc
+      recurse: yes
+      state: directory 
+
+  - name: Configuring the bridge interface STAGE I
+    copy:
+      src: ~/ansible_templates/lxc/default.conf
+      dest: /etc/lxc/default.conf
+  - name: Configuring the bridge interface STAGE II
+    copy:
+      src: ~/ansible_templates/lxc/lxc-net
+      dest: /etc/default/lxc-net
+  - name: Configuring SCREEN for ROOT
+    copy:
+      src: ~/ansible_templates/user/screenrc
+      dest: /root/.screenrc
+  - name: Configuring SCREEN for USER
+    copy:
+      src: ~/ansible_templates/user/screenrc
+      dest: /home/{{ username }}/.screenrc
+  - name: Configuring VIM for ROOT
+    copy:
+      src: ~/ansible_templates/user/vimrc
+      dest: /root/.vimrc
+  - name: Configuring VIM for USER
+    copy:
+      src: ~/ansible_templates/user/vimrc
+      dest: /home/dz/.vimrc
+  - name: Make bash-completion for ROOT
+    lineinfile:
+      dest: /root/.bashrc
+      line: '. /etc/bash_completion'
+  - name: Make bash-completion for USER
+    lineinfile:
+      dest: /home/{{ username }}/.bashrc
+      line: '. /etc/bash_completion'
+
+
+  - name: sysctl allow IPv4 packet forwarding
+    sysctl:
+      name: net.ipv4.ip_forward
+      value: 1
+      sysctl_set: yes
+      state: present
+      reload: yes
+
+
+  - name: Create a container
+    lxc_container:
+      name: "{{ container  }}"
+      container_log: true
+      template: debian
+      state: stopped
+      template_options: --release stretch
+
+
+  - name: Configuring the network for the container STAGE I
+    lineinfile:
+      dest: /var/lib/lxc/{{ container }}/config
+      line: 'lxc.network.ipv4 = "{{address}}"'
+  - name: Configuring the network for the container STAGE II
+    lineinfile:
+      dest: /var/lib/lxc/{{ container }}/config
+      line: 'lxc.network.ipv4.gateway = "{{ gateway }}"'
+  - name: Configuring the network for the container STAGE III
+    lineinfile:
+      dest: /var/lib/lxc/{{ container }}/config
+      line: 'lxc.network.name   = eth0'
+  - name: Configuring the network for the container STAGE IV
+    copy:
+      src: ~/ansible_templates/lxc/network
+      dest: /var/lib/lxc/{{ container }}/rootfs/etc/network/interfaces
+
+
+  - name: Configuring SSH-port for the container
+    replace:
+      dest: /var/lib/lxc/{{ container }}/rootfs/etc/ssh/sshd_config
+      regexp: '#Port 22'
+      replace: 'Port {{ sshport }}'
+  - name: Allow SSH root-password for the container
+    replace:
+      dest: /var/lib/lxc/{{ container }}/rootfs/etc/ssh/sshd_config
+      regexp: '#PermitRootLogin prohibit-password'
+      replace: 'PermitRootLogin yes'
+  - name: Ensure /root/.ssh directory exists
+    file:
+      path: /var/lib/lxc/{{ container }}/rootfs/root/.ssh
+      recurse: yes
+      state: directory
+  - name: Add SSH-key container for ROOT
+    copy:
+      src: ~/.ssh/id_rsa.pub
+      dest: /var/lib/lxc/{{ container }}/rootfs/root/.ssh/authorized_keys
+
+
+  - name: re/START the container
+    lxc_container:
+      name: "{{ container }}"
+      state: restarted
+  - name: Final pre-configuration task
+    lxc_container:
+      name: "{{ container }}"
+      container_command: |
+        apt-get update
+        apt-get install -y python
+
+  - name: Add container to inventory
+    local_action:
+      module: lineinfile
+      dest: ~/nodes
+      insertafter: "[lxc]"
+      line: "{{ container }} ansible_host={{ inventory_hostname }} ansible_ssh_port={{ sshport }}"
